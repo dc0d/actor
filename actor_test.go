@@ -212,6 +212,33 @@ func Test_should_respawn_after_idle_timeout_elapsed_if_respawn_count_is_provided
 		time.Millisecond*100, time.Millisecond*20)
 }
 
+func Example() {
+	mailbox := make(chan any, 3)
+	callbacks := &actorHandler{stopped: make(chan struct{})}
+
+	Start[any](context.Background(), mailbox, callbacks)
+
+	mailbox <- 1
+	mailbox <- 2
+	mailbox <- 3
+
+	close(mailbox)
+	<-callbacks.stopped
+
+	// Output:
+	// processing message 1
+	// processing message 2
+	// processing message 3
+}
+
+type actorHandler struct{ stopped chan struct{} }
+
+func (o *actorHandler) Received(msg any) {
+	fmt.Println("processing message", msg)
+}
+
+func (o *actorHandler) Stopped() { close(o.stopped) }
+
 func getNumberOfStarts(box interface{}) int {
 	accessMailboxState.Lock()
 	defer accessMailboxState.Unlock()
