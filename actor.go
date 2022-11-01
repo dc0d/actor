@@ -85,7 +85,6 @@ type (
 	}
 
 	RequestCount int
-	MailboxSize  int
 )
 
 func WithAbsoluteTimeout(timeout time.Duration) Option {
