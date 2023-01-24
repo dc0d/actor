@@ -12,14 +12,22 @@ func Start[T any](ctx context.Context, mailbox Mailbox[T], callbacks Callbacks[T
 	start(ctx, mailbox, callbacks, opts)
 }
 
+func WithAbsoluteTimeout(timeout time.Duration) Option {
+	return func(opts actorOptions) actorOptions { opts.absoluteTimeout = timeout; return opts }
+}
+
+func WithIdleTimeout(timeout time.Duration) Option {
+	return func(opts actorOptions) actorOptions { opts.idleTimeout = timeout; return opts }
+}
+
+func WithRespawnAfter(respawnAfter RequestCount) Option {
+	return func(opts actorOptions) actorOptions { opts.respawnAfter = respawnAfter; return opts }
+}
+
 func start[T any](ctx context.Context, mailbox Mailbox[T], callbacks Callbacks[T], opts actorOptions) {
 	go func() {
-		if started != nil {
-			started(mailbox)
-		}
-		if stopped != nil {
-			defer stopped(mailbox)
-		}
+		opts.started()
+		defer opts.stopped()
 
 		var (
 			absoluteTimeout = opts.absoluteTimeout
@@ -78,25 +86,40 @@ type (
 
 	Option func(actorOptions) actorOptions
 
-	actorOptions struct {
-		absoluteTimeout time.Duration
-		idleTimeout     time.Duration
-		respawnAfter    RequestCount
-	}
-
 	RequestCount int
 )
 
-func WithAbsoluteTimeout(timeout time.Duration) Option {
-	return func(opts actorOptions) actorOptions { opts.absoluteTimeout = timeout; return opts }
+type actorOptions struct {
+	absoluteTimeout time.Duration
+	idleTimeout     time.Duration
+	respawnAfter    RequestCount
+
+	startedFn func()
+	stoppedFn func()
 }
 
-func WithIdleTimeout(timeout time.Duration) Option {
-	return func(opts actorOptions) actorOptions { opts.idleTimeout = timeout; return opts }
+func (opt actorOptions) started() {
+	if opt.startedFn == nil {
+		return
+	}
+
+	opt.startedFn()
 }
 
-func WithRespawnAfter(respawnAfter RequestCount) Option {
-	return func(opts actorOptions) actorOptions { opts.respawnAfter = respawnAfter; return opts }
+func (opt actorOptions) stopped() {
+	if opt.stoppedFn == nil {
+		return
+	}
+
+	opt.stoppedFn()
+}
+
+func withStarted(startedFn func()) Option {
+	return func(opts actorOptions) actorOptions { opts.startedFn = startedFn; return opts }
+}
+
+func withStopped(stoppedFn func()) Option {
+	return func(opts actorOptions) actorOptions { opts.stoppedFn = stoppedFn; return opts }
 }
 
 func applyOptions(opts ...Option) actorOptions {
@@ -106,8 +129,3 @@ func applyOptions(opts ...Option) actorOptions {
 	}
 	return options
 }
-
-var (
-	started func(pool interface{})
-	stopped func(pool interface{})
-)

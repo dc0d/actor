@@ -1,7 +1,7 @@
 .PHONY: test
 test:
 	clear
-	go test -timeout 30s -cover -p 1 ./...
+	go test -timeout 30s -cover ./...
 
 test-silent:
 	clear
