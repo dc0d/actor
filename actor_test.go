@@ -18,17 +18,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	started = func(box interface{}) {
-		accessMailboxState.Lock()
-		defer accessMailboxState.Unlock()
-		mailboxStateWorkerStartCount[strKey(box)]++
-	}
-	stopped = func(box interface{}) {
-		accessMailboxState.Lock()
-		defer accessMailboxState.Unlock()
-		mailboxStateWorkerStopCount[strKey(box)]++
-	}
-
 	exitVal := m.Run()
 
 	os.Exit(exitVal)
@@ -146,6 +135,7 @@ func Test_should_stop_after_idle_timeout_elapsed(t *testing.T) {
 }
 
 func Test_should_respawn_after_receiving_n_messages(t *testing.T) {
+	testSignals := newTestSignals()
 	type T = interface{}
 	var (
 		mailbox   = make(chan T)
@@ -154,7 +144,8 @@ func Test_should_respawn_after_receiving_n_messages(t *testing.T) {
 	callbacks.StoppedFunc = func() {}
 	callbacks.ReceivedFunc = func(T) {}
 
-	Start[T](context.Background(), mailbox, callbacks, WithRespawnAfter(10))
+	Start[T](context.Background(), mailbox, callbacks, WithRespawnAfter(10),
+		withStarted(testSignals.started), withStopped(testSignals.stopped))
 
 	go func() {
 		for i := 0; i < 20; i++ {
@@ -162,13 +153,14 @@ func Test_should_respawn_after_receiving_n_messages(t *testing.T) {
 		}
 	}()
 
-	assert.Eventually(t, func() bool { return assert.EqualValues(t, 3, getNumberOfStarts(mailbox)) },
+	assert.Eventually(t, func() bool { return assert.EqualValues(t, 3, testSignals.startCount()) },
 		time.Millisecond*300, time.Millisecond*20)
-	assert.Eventually(t, func() bool { return assert.EqualValues(t, 2, getNumberOfStops(mailbox)) },
+	assert.Eventually(t, func() bool { return assert.EqualValues(t, 2, testSignals.stopCount()) },
 		time.Millisecond*300, time.Millisecond*20)
 }
 
 func Test_should_not_respawn_if_not_provided(t *testing.T) {
+	testSignals := newTestSignals()
 	type T = interface{}
 	var (
 		mailbox   = make(chan T)
@@ -177,7 +169,8 @@ func Test_should_not_respawn_if_not_provided(t *testing.T) {
 	callbacks.StoppedFunc = func() {}
 	callbacks.ReceivedFunc = func(T) {}
 
-	Start[T](context.Background(), mailbox, callbacks)
+	Start[T](context.Background(), mailbox, callbacks,
+		withStarted(testSignals.started), withStopped(testSignals.stopped))
 
 	go func() {
 		for i := 0; i < 20; i++ {
@@ -185,13 +178,14 @@ func Test_should_not_respawn_if_not_provided(t *testing.T) {
 		}
 	}()
 
-	assert.Eventually(t, func() bool { return assert.EqualValues(t, 1, getNumberOfStarts(mailbox)) },
+	assert.Eventually(t, func() bool { return assert.EqualValues(t, 1, testSignals.startCount()) },
 		time.Millisecond*300, time.Millisecond*20)
-	assert.Eventually(t, func() bool { return assert.EqualValues(t, 0, getNumberOfStops(mailbox)) },
+	assert.Eventually(t, func() bool { return assert.EqualValues(t, 0, testSignals.stopCount()) },
 		time.Millisecond*300, time.Millisecond*20)
 }
 
 func Test_should_respawn_after_idle_timeout_elapsed_if_respawn_count_is_provided(t *testing.T) {
+	testSignals := newTestSignals()
 	type T = interface{}
 	var (
 		mailbox   = make(chan T)
@@ -200,12 +194,12 @@ func Test_should_respawn_after_idle_timeout_elapsed_if_respawn_count_is_provided
 	callbacks.StoppedFunc = func() {}
 
 	Start[T](context.Background(), mailbox, callbacks,
-		WithIdleTimeout(time.Millisecond*100),
-		WithRespawnAfter(100))
+		WithIdleTimeout(time.Millisecond*100), WithRespawnAfter(100),
+		withStarted(testSignals.started), withStopped(testSignals.stopped))
 
-	assert.Eventually(t, func() bool { return getNumberOfStarts(mailbox) == 2 },
+	assert.Eventually(t, func() bool { return testSignals.startCount() == 2 },
 		time.Millisecond*300, time.Millisecond*20)
-	assert.Eventually(t, func() bool { return getNumberOfStops(mailbox) == 1 },
+	assert.Eventually(t, func() bool { return testSignals.stopCount() == 1 },
 		time.Millisecond*300, time.Millisecond*20)
 
 	assert.Never(t, func() bool { return len(callbacks.StoppedCalls()) > 0 },
@@ -231,6 +225,8 @@ func Example() {
 	// processing message 3
 }
 
+//
+
 type actorHandler struct{ stopped chan struct{} }
 
 func (o *actorHandler) Received(msg any) {
@@ -239,26 +235,38 @@ func (o *actorHandler) Received(msg any) {
 
 func (o *actorHandler) Stopped() { close(o.stopped) }
 
-func getNumberOfStarts(box interface{}) int {
-	accessMailboxState.Lock()
-	defer accessMailboxState.Unlock()
+//
 
-	return mailboxStateWorkerStartCount[strKey(box)]
+func newTestSignals() *testSignals {
+	return &testSignals{}
 }
 
-func getNumberOfStops(box interface{}) int {
-	accessMailboxState.Lock()
-	defer accessMailboxState.Unlock()
-
-	return mailboxStateWorkerStopCount[strKey(box)]
+type testSignals struct {
+	startCnt int
+	stopCnt  int
+	m        sync.RWMutex
 }
 
-func strKey(key interface{}) string {
-	return fmt.Sprintf("%v", key)
+func (ts *testSignals) startCount() int {
+	ts.m.RLock()
+	defer ts.m.RUnlock()
+	return ts.startCnt
 }
 
-var (
-	mailboxStateWorkerStopCount  = make(map[string]int)
-	mailboxStateWorkerStartCount = make(map[string]int)
-	accessMailboxState           = &sync.Mutex{}
-)
+func (ts *testSignals) stopCount() int {
+	ts.m.RLock()
+	defer ts.m.RUnlock()
+	return ts.stopCnt
+}
+
+func (ts *testSignals) started() {
+	ts.m.Lock()
+	defer ts.m.Unlock()
+	ts.startCnt++
+}
+
+func (ts *testSignals) stopped() {
+	ts.m.Lock()
+	defer ts.m.Unlock()
+	ts.stopCnt++
+}
